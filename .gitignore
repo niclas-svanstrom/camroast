@@ -2,3 +2,5 @@
 .media
 .cache_audio
 .env
+media/
+cache_audio/

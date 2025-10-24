@@ -1,61 +1,62 @@
 #!/usr/bin/env python3
 """
-Real-time roasting skeletons – Skalle-pär & Benrangel
-----------------------------------------------------
+Real-time roasting skeletons – Skalle-pär & Benrangel (no file I/O)
+-------------------------------------------------------------------
 • GPT-4o-mini vision  → scene description & jokes
-• OpenAI TTS-1        → Swedish fast-paced, dialect voices
+• ElevenLabs TTS      → Swedish fast-paced, dialect voices
 • YOLOv8n             → person-/car-detection & live overlay
-• Pygame              → playback
+• Pygame              → playback (from memory, no disk writes)
 """
 
 # ── Imports ───────────────────────────────────────────────────────────────
-import asyncio, base64, hashlib, os
+import asyncio, base64, hashlib, os, io
 from collections import deque
-from datetime import datetime, timedelta
-from pathlib import Path
-
+from datetime import datetime
 import cv2
 import numpy as np
 from openai import OpenAI
 import pygame
 from dotenv import load_dotenv
 from ultralytics import YOLO
-import requests
+import re
+import unicodedata
 
-
-ELEVEN_KEY = os.getenv("ELEVENLABS_API_KEY")
-ELEVEN_URL = "https://api.elevenlabs.io/v1/text-to-speech/{}"
+# NEW: ElevenLabs SDK
+from elevenlabs.client import ElevenLabs
 
 # ── Config ────────────────────────────────────────────────────────────────
 load_dotenv()
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+eleven = ElevenLabs(api_key=os.getenv("ELEVENLABS_API_KEY"))
 
-# VOICE_SKALLEPAR  = "ash"
-# VOICE_BENRANGEL  = "coral"
 SHOW_LIVE        = True          # set False for head-less deploy
 FPS              = 10
 FRAME_SKIP       = 5
 GPT_COOLDOWN_SEC = 10
-MEDIA_ROOT       = Path("media")
-CACHE_DIR        = Path("cache_audio")
-KEEP_DAYS        = 3
 
-VOICE_SKALLEPAR  = "S6pZEFGfrgnWx4AETPdD"   # e.g. "Adam"
-VOICE_BENRANGEL  = "NHVO1d5lgqVtAvyYNL2P"
+VOICE_SKALLEPAR  = "NHVO1d5lgqVtAvyYNL2P"   # e.g. "Adam"
+VOICE_BENRANGEL  = "S6pZEFGfrgnWx4AETPdD"
 
 SYSTEM_PROMPT = (
-    "Du är två sarkastiska skelett … Max två meningar totalt. "
+    "Du är två sarkastiska skelett som står på gatan och roastar folk som går förbi. "
+    "Var kvick, syrlig och självironisk – ni skojar både om personen och varandra. "
     "Varje roast består exakt av två repliker: "
     "rad 1 börjar med 'Skalle-pär:' och rad 2 börjar med 'Benrangel:'. "
-    "Blanda även in er själva och skoja med varandra."
+    "Ibland använder ni varandras namn i replikerna, naturligt i början eller mitten av meningen "
+    "(t.ex. 'Titta där, Skalle-pär...' eller 'Du har rätt, Benrangel...'), inte efteråt. "
+    "Blanda in skämt om att ni är skelett och låt dialogen kännas som ett snabbt, bitskt gattsnack. "
+    "Skriv alltid exakt två meningar totalt (en per rad). "
+    "Exempel:\n"
+    "Skalle-pär: Titta där, Benrangel, den där killen ser ut som han tappade sin spegel för tio år sen!\n"
+    "Benrangel: Haha, snälla Skalle-pär, vi har mer kött på benen än han har självkänsla!"
 )
+
 
 # ── Singletons ────────────────────────────────────────────────────────────
 yolo  = YOLO("yolov8n.pt")
 bsub  = cv2.createBackgroundSubtractorMOG2(120, 50)
 pygame.mixer.init()
-CACHE_DIR.mkdir(exist_ok=True)
-history = deque(maxlen=10)
+history = deque(maxlen=6)
 
 # ── Helpers ───────────────────────────────────────────────────────────────
 def encode_jpg(frame: np.ndarray) -> bytes:
@@ -82,44 +83,96 @@ def is_interesting(results, motion_pixels: int) -> bool:
 def describe(img_b64: str) -> str:
     response = client.responses.create(
         model="gpt-4o-mini",
-        input=[
-            {
-                "role": "user",
-                "content": [
-                    { "type": "input_text", "text": "Beskriv vad du ser och roa publiken." },
-                    {
-                        "type": "input_image",
-                        "image_url": f"data:image/jpeg;base64,{img_b64}",
-                    },
-                ],
-            }
-        ],
+        input=[{
+            "role": "user",
+            "content": [
+                { "type": "input_text", "text": "Beskriv vad du ser och roa publiken." },
+                { "type": "input_image",
+                  "image_url": f"data:image/jpeg;base64,{img_b64}" },
+            ],
+        }],
         max_output_tokens=120
     )
-    return response.output_text  
+    return response.output_text
 
 def roast(scene_desc: str) -> str:
     messages = [*history,
                 {"role": "user",
                  "content": f"Scenbeskrivning: {scene_desc}\n\nSkriv nu ditt roast."}]
     rsp = client.responses.create(
-        model="gpt-4o-mini",
+        model="gpt-5-mini",
         instructions=SYSTEM_PROMPT,
         input=messages,
         max_output_tokens=120
     )
     out = rsp.output_text
+    print(out)
     history.append({"role": "assistant", "content": out})
     return out
 
+
+SPEAKER_REGEX = re.compile(
+    r'^\s*(Skalle[\-\s]?pär|Benrangel)\s*[:：]\s*(.+?)\s*$',
+    re.IGNORECASE | re.MULTILINE
+)
+
+NAME_AT_END_REGEX = re.compile(
+    r'[\s\-\—–,:]*\b(Skalle[\-\s]?pär|Benrangel)\b[\s\.\!\?]*$',
+    re.IGNORECASE
+)
+
+def _normalize_text(s: str) -> str:
+    # NFKC normalisering + ersätt vanliga “fultecken” till kolon/radslut
+    s = unicodedata.normalize("NFKC", s)
+    s = s.replace("—", "-").replace("–", "-")
+    s = s.replace("：", ":")
+    return s
+
+def _clean_line(text: str) -> str:
+    # Ta bort citattecken/emojis i början, och ett ev. talarnamn i slutet
+    text = text.strip().strip('“”"\'`')
+    text = NAME_AT_END_REGEX.sub("", text).strip()
+    return text
+
 def assign_alternating_voices(raw: str):
-    lines = [ln.strip() for ln in raw.splitlines() if ln.strip()]
-    if len(lines) < 2:
+    raw = _normalize_text(raw)
+    # Plocka ut max två repliker med regex
+    matches = SPEAKER_REGEX.findall(raw)
+
+    # Om regex inte hittar exakt två, gör en försiktig fallback:
+    if len(matches) < 2:
+        # Splitta på rader, filtrera tomma
+        lines = [ln.strip() for ln in raw.splitlines() if ln.strip()]
+        if len(lines) >= 2:
+            # Försök tolka första som Skalle-pär, andra som Benrangel
+            first_text  = _clean_line(re.sub(r'^\s*Skalle[\-\s]?pär\s*[:：]\s*', '', lines[0], flags=re.I))
+            second_text = _clean_line(re.sub(r'^\s*Benrangel\s*[:：]\s*', '', lines[1], flags=re.I))
+            return [(VOICE_SKALLEPAR, first_text), (VOICE_BENRANGEL, second_text)]
+        else:
+            return []
+
+    # matches är lista av tuples (speaker, content)
+    # Hämta de två första i rätt ordning: Skalle-pär först, sen Benrangel
+    # Bygg en liten buffert per talare
+    spk_map = {"skalle-pär": None, "skalle pär": None, "benrangel": None}
+    ordered = []
+    for spk, content in matches:
+        key = spk.lower().replace("  ", " ").replace("–", "-").replace("—", "-").replace("  ", " ").replace("  ", " ")
+        key = key.replace("skalle pär", "skalle-pär")  # normalisera ev. mellanslag
+        txt = _clean_line(content)
+        if "skalle" in key:
+            spk_map["skalle-pär"] = txt if spk_map["skalle-pär"] is None else spk_map["skalle-pär"]
+        elif "benrangel" in key:
+            spk_map["benrangel"] = txt if spk_map["benrangel"] is None else spk_map["benrangel"]
+
+    if spk_map["skalle-pär"] is None or spk_map["benrangel"] is None:
         return []
-    def strip_pref(l,p): return l.split(":",1)[1].strip() if l.lower().startswith(p) else l
-    first  = strip_pref(lines[0], "skalle-pär:")
-    second = strip_pref(lines[1], "benrangel:")
-    return [(VOICE_SKALLEPAR, first), (VOICE_BENRANGEL, second)]
+
+    return [
+        (VOICE_SKALLEPAR, spk_map["skalle-pär"]),
+        (VOICE_BENRANGEL, spk_map["benrangel"])
+    ]
+
 
 DIALECT_GUIDE = (
     "Voice: Klar och tydlig, men med bred småländsk dialekt – r:en rullar …\n"
@@ -128,92 +181,64 @@ DIALECT_GUIDE = (
     "Delivery: ca 1.5× tempo, mikro-pauser före poänger."
 )
 
-# def tts(text: str, voice: str) -> Path:
-#     p = CACHE_DIR / f"{voice}_{hashlib.md5(text.encode()).hexdigest()}.mp3"
-#     if p.exists():
-#         return p
-#     with client.audio.speech.with_streaming_response.create(
-#             model="tts-1",
-#             voice=voice,
-#             input=text,
-#             instructions=DIALECT_GUIDE
-#     ) as s:
-#         s.stream_to_file(p)
-#     return p
+# ── TTS (new ElevenLabs SDK, in-memory) ───────────────────────────────────
+def tts_bytes(text: str, voice_id: str) -> bytes:
+    """
+    Synthesize to memory using ElevenLabs SDK (no disk writes).
+    Collects the streamed MP3 chunks into a single bytes object.
+    """
+    stream = eleven.text_to_speech.convert(
+        text=text,
+        voice_id=voice_id,
+        model_id="eleven_multilingual_v2",   # or "eleven_turbo_v2_5"
+        output_format="mp3_44100_128",       # MP3 stream
+        # You can also pass 'optimize_streaming_latency' if needed
+    )
+    return b"".join(chunk for chunk in stream if isinstance(chunk, (bytes, bytearray)))
 
-def tts(text: str, voice_id: str) -> Path:
-    path = CACHE_DIR / f"11_{voice_id}_{hashlib.md5(text.encode()).hexdigest()}.mp3"
-    if path.exists():
-        return path
+def play_bytes(mp3_bytes: bytes):
+    """Play MP3 bytes entirely from memory using pygame."""
+    snd = pygame.mixer.Sound(file=io.BytesIO(mp3_bytes))
+    ch = snd.play()
+    clock = pygame.time.Clock()
+    while ch.get_busy():
+        clock.tick(10)
 
-    payload = {
-        "text"      : text,
-        "model_id"  : "eleven_multilingual_v2",   # or "eleven_turbo_v2_5"
-        "voice_settings": {                       # optional fine-tune
-            "stability"        : 0.31,
-            "similarity_boost" : 0.97,
-            "style"            : 0.50,
-            "use_speaker_boost": True
-        }
-    }
-    headers = {
-        "xi-api-key"  : ELEVEN_KEY,
-        "Content-Type": "application/json"
-    }
-    r = requests.post(ELEVEN_URL.format(voice_id), json=payload, headers=headers, timeout=45)
-    r.raise_for_status()                       # -> 429 if quota hit
-    path.write_bytes(r.content)                # MP3 bytes in body
-    return path
-
-def play(path: Path):
-    pygame.mixer.music.load(str(path))
-    pygame.mixer.music.play()
-    while pygame.mixer.music.get_busy():
-        pygame.time.Clock().tick(10)
-
-async def synth_audio_async(text: str, voice: str) -> Path:
-    """ Kör ElevenLabs-synth i en bakgrundstråd och returnerar Path. """
-    return await asyncio.to_thread(tts, text, voice)
-
+async def synth_audio_async(text: str, voice: str) -> bytes:
+    """ Kör ElevenLabs-synth i en bakgrundstråd och returnerar MP3-bytes. """
+    return await asyncio.to_thread(tts_bytes, text, voice)
 
 # ── Roast pipeline ────────────────────────────────────────────────────────
-async def roast_once(frame: np.ndarray, labels, out_dir: Path):
+async def roast_once(frame: np.ndarray, labels):
     b64 = base64.b64encode(encode_jpg(frame)).decode()
     desc = await asyncio.to_thread(describe, b64)
     desc += " | YOLO såg: " + ", ".join(sorted(labels)) + "."
     joke = await asyncio.to_thread(roast, desc)
 
     lines = assign_alternating_voices(joke)
-    if not lines:                      # inget att säga
+    if not lines:
         return
 
     # ➊ starta bakgrunds-tasker direkt
     tasks = [asyncio.create_task(synth_audio_async(txt, vce))
              for vce, txt in lines]
 
-    # ➋ vänta in den första,
-    #    spela den medan nästa fortfarande syntetiseras
-    path_first = await tasks[0]
-    play(path_first)                   # blockar tills klart
+    # ➋ vänta in den första och spela medan nästa laddas
+    first_bytes = await tasks[0]
+    play_bytes(first_bytes)
 
     # ➌ vänta in nästa (brukar redan vara klar), spela osv.
     for t in tasks[1:]:
-        path = await t
-        play(path)
-
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    (out_dir / f"{ts}.jpg").write_bytes(base64.b64decode(b64))
+        audio_bytes = await t
+        play_bytes(audio_bytes)
 
 # ── Main loop ─────────────────────────────────────────────────────────────
 async def main(cam=0):
-    MEDIA_ROOT.mkdir(exist_ok=True)
     cap = cv2.VideoCapture(cam)
     if not cap.isOpened():
         raise RuntimeError("Webcam unavailable")
 
     frame_i, last = 0, datetime.min
-    out_dir = MEDIA_ROOT / datetime.now().strftime("%Y%m%d_%H%M%S")
-    out_dir.mkdir(exist_ok=True)
 
     print("Skalle-pär & Benrangel spanar …  (tryck Q för att avsluta)")
     try:
@@ -238,19 +263,13 @@ async def main(cam=0):
 
             if is_interesting(results, motion_pixels) and \
                (datetime.now() - last).total_seconds() > GPT_COOLDOWN_SEC:
-                await roast_once(frame, lbls, out_dir)
+                await roast_once(frame, lbls)
                 last = datetime.now()
 
             await asyncio.sleep(0.002)
     finally:
         cap.release()
         cv2.destroyAllWindows()
-        # clean old media
-        cutoff = datetime.now() - timedelta(days=KEEP_DAYS)
-        for p in MEDIA_ROOT.rglob("*"):
-            if p.is_file() and datetime.fromtimestamp(p.stat().st_mtime) < cutoff:
-                try: p.unlink()
-                except: pass
 
 # ── CLI ───────────────────────────────────────────────────────────────────
 if __name__ == "__main__":

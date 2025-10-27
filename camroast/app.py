@@ -8,6 +8,7 @@ from .yolo_model import Detectors
 from .vision import annotate_and_labels as V_ANN, is_dark as V_DARK, has_person_box as V_HAS_PERSON, encode_jpg
 from .pipeline import roast_once
 from .premade import load_premade_pairs, play_premade_pair
+from .premade import load_attention_files, play_random_attention
 from . import mic
 
 class CameraApp:
@@ -86,6 +87,7 @@ class CameraApp:
             raise RuntimeError("Webcam unavailable")
 
         self.ui.premade_pairs = load_premade_pairs(self.s.premade_dir)
+        self.ui.attention_files = load_attention_files(self.s.attention_dir)
         if self.s.show_live:
             cv2.namedWindow(WINDOW_NAME)
             cv2.setMouseCallback(WINDOW_NAME, self._on_mouse)
@@ -118,6 +120,11 @@ class CameraApp:
             if trigger_manual or trigger_auto:
                 self.ui.request_roast_now = False
                 import base64
+                # Start a non-blocking attention sound while generating
+                try:
+                    play_random_attention(self.ui.attention_files)
+                except Exception:
+                    pass
                 txt = await roast_once(
                     frame,
                     labels,

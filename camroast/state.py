@@ -21,3 +21,4 @@ class UIState:
     _gate_text: str = ""
     premade_pairs: list[tuple[str,str]] = field(default_factory=list)
     premade_idx: int = 0
+    attention_files: list[str] = field(default_factory=list)

@@ -1,4 +1,5 @@
 import os
+import random
 
 
 def load_premade_pairs(root: str):
@@ -33,6 +34,20 @@ def load_premade_pairs(root: str):
     return pairs
 
 
+def load_attention_files(root: str):
+    files = []
+    try:
+        if not os.path.isdir(root):
+            return files
+        for fn in os.listdir(root):
+            low = fn.lower()
+            if any(low.endswith(ext) for ext in (".mp3", ".wav", ".ogg")):
+                files.append(os.path.join(root, fn))
+    except Exception:
+        pass
+    return files
+
+
 def _ensure_mixer():
     import pygame
     try:
@@ -62,3 +77,17 @@ def play_premade_pair(paths):
                 clock.tick(10)
         except Exception as e:
             print(f"Failed to play {p}: {e}")
+
+
+def play_random_attention(files: list[str]):
+    # Fire-and-forget: start playing one random file, do not block
+    import pygame
+    if not files:
+        return
+    _ensure_mixer()
+    try:
+        p = random.choice(files)
+        snd = pygame.mixer.Sound(p)
+        snd.play()  # non-blocking
+    except Exception as e:
+        print(f"Failed to play attention sound: {e}")

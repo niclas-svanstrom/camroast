@@ -8,7 +8,8 @@ class Detectors:
         self.bsub = cv2.createBackgroundSubtractorMOG2(120, 50)
 
     def infer(self, frame):
-        return self.yolo(frame, verbose=False, classes=[0,2,5,7])[0]
+        # Detect only persons (COCO class 0). Avoids car/bus/truck clutter.
+        return self.yolo(frame, verbose=False, classes=[0])[0]
 
     def motion_pixels(self, frame):
         return int(cv2.countNonZero(self.bsub.apply(frame)))

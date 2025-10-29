@@ -13,23 +13,6 @@ def _draw_button(img, rect, text, active=False):
     cv2.putText(img, text, (tx, ty), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (240, 240, 240), 1)
 
 
-def _wrap_text(text, max_width_px, scale=0.6, thickness=1):
-    words = text.split()
-    lines = []
-    cur = ""
-    for w in words:
-        test = (cur + " " + w).strip()
-        (tw, _), _ = cv2.getTextSize(test, cv2.FONT_HERSHEY_SIMPLEX, scale, thickness)
-        if tw > max_width_px and cur:
-            lines.append(cur)
-            cur = w
-        else:
-            cur = test
-    if cur:
-        lines.append(cur)
-    return lines
-
-
 def draw_ui_overlay(frame, state):
     h, w = frame.shape[:2]
     pad = 8
@@ -71,22 +54,3 @@ def draw_ui_overlay(frame, state):
                 cv2.putText(frame, gate_text, (tx, ty + 18), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (180, 180, 180), 1)
         except Exception:
             pass
-
-    if state.last_text:
-        max_w = int(w * 0.9)
-        lines = _wrap_text(state.last_text, max_w)
-        scale, th = 0.6, 1
-        lh = int(18 * scale) + 8
-        box_h = lh * len(lines) + 16
-        x1 = pad
-        y2 = h - pad
-        y1 = max(pad, y2 - box_h)
-        x2 = x1 + max_w + 2 * pad
-        overlay = frame.copy()
-        cv2.rectangle(overlay, (x1, y1), (x2, y2), (0, 0, 0), -1)
-        cv2.addWeighted(overlay, 0.4, frame, 0.6, 0, frame)
-        y = y1 + 16
-        for ln in lines:
-            cv2.putText(frame, ln, (x1 + 12, y), cv2.FONT_HERSHEY_SIMPLEX, scale, (255, 255, 255), th)
-            y += lh
-

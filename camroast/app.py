@@ -5,7 +5,7 @@ from .settings import Settings
 from .state import UIState, WINDOW_NAME
 from .ui import draw_ui_overlay
 from .yolo_model import Detectors
-from .vision import annotate_and_labels as V_ANN, is_dark as V_DARK, has_person_box as V_HAS_PERSON, encode_jpg
+from .vision import annotate_and_labels as V_ANN, is_dark as V_DARK, has_person_box as V_HAS_PERSON, encode_jpg, maybe_enhance_for_dark
 from .pipeline import roast_once
 from .premade import load_premade_pairs, play_premade_pair
 from .premade import load_attention_files, play_random_attention
@@ -86,6 +86,29 @@ class CameraApp:
         if not cap.isOpened():
             raise RuntimeError("Webcam unavailable")
 
+        # Try to improve low-light via camera properties if supported
+        if self.s.try_camera_low_light:
+            try:
+                # Enable auto exposure where supported (0.75 on many backends)
+                cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.75)
+            except Exception:
+                pass
+            try:
+                if self.s.camera_exposure is not None:
+                    cap.set(cv2.CAP_PROP_EXPOSURE, self.s.camera_exposure)
+            except Exception:
+                pass
+            try:
+                if self.s.camera_gain is not None:
+                    cap.set(cv2.CAP_PROP_GAIN, self.s.camera_gain)
+            except Exception:
+                pass
+            try:
+                if self.s.camera_brightness is not None:
+                    cap.set(cv2.CAP_PROP_BRIGHTNESS, self.s.camera_brightness)
+            except Exception:
+                pass
+
         self.ui.premade_pairs = load_premade_pairs(self.s.premade_dir)
         self.ui.attention_files = load_attention_files(self.s.attention_dir)
         if self.s.show_live:
@@ -97,9 +120,10 @@ class CameraApp:
             if not ok:
                 await asyncio.sleep(0.01); continue
 
-            results = self.det.infer(frame)
-            motion_pixels = self.det.motion_pixels(frame)
-            vis, labels = V_ANN(frame, results)
+            proc = maybe_enhance_for_dark(frame, self.s.dark_luma_thresh)
+            results = self.det.infer(proc)
+            motion_pixels = self.det.motion_pixels(proc)
+            vis, labels = V_ANN(proc, results)
 
             draw_ui_overlay(vis, self.ui)
             if self.s.show_live:

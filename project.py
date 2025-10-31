@@ -6,4 +6,4 @@ from camroast.app import CameraApp
 if __name__ == "__main__":
     s = Settings()
     app = CameraApp(s)
-    asyncio.run(app.run(cam=0))
+    asyncio.run(app.run(cam=s.camera_source))

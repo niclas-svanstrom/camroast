@@ -22,3 +22,7 @@ class UIState:
     premade_pairs: list[tuple[str,str]] = field(default_factory=list)
     premade_idx: int = 0
     attention_files: list[str] = field(default_factory=list)
+    # Tapo event indicators
+    tapo_ok: bool = False
+    tapo_human_recent: bool = False
+    tapo_motion_recent: bool = False

@@ -54,3 +54,24 @@ def draw_ui_overlay(frame, state):
                 cv2.putText(frame, gate_text, (tx, ty + 18), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (180, 180, 180), 1)
         except Exception:
             pass
+
+    # Tapo event indicators (if available)
+    try:
+        show_tapo = getattr(state, 'tapo_ok', False) or getattr(state, 'tapo_human_recent', False) or getattr(state, 'tapo_motion_recent', False)
+        if show_tapo:
+            tx = premade_rect[2] + 10
+            ty = premade_rect[1] + (premade_rect[3] - premade_rect[1]) // 2
+            label = "Tapo"
+            cv2.putText(frame, label, (tx, ty), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 200), 1)
+            # Draw two small indicators: Human (green), Motion (yellow)
+            cx = tx + 60
+            cy = ty - 6
+            human_active = bool(getattr(state, 'tapo_human_recent', False))
+            motion_active = bool(getattr(state, 'tapo_motion_recent', False))
+            cv2.circle(frame, (cx, cy), 6, (0, 220, 0) if human_active else (80, 80, 80), -1)
+            cv2.putText(frame, 'H', (cx - 4, cy + 4), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 0), 1)
+            cx2 = cx + 22
+            cv2.circle(frame, (cx2, cy), 6, (0, 220, 220) if motion_active else (80, 80, 80), -1)
+            cv2.putText(frame, 'M', (cx2 - 4, cy + 4), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 0), 1)
+    except Exception:
+        pass

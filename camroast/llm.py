@@ -1,129 +1,117 @@
+# camroast/llm.py
+"""Joke generation with the OpenAI Responses API. Returns one line per skeleton as structured JSON."""
+import json
 import os
-import re
-import unicodedata
+
 from dotenv import load_dotenv
 from openai import OpenAI
+
+from .util import short_err
 
 load_dotenv()
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-# Voice IDs (can be overridden by env if needed)
-VOICE_SKALLEPAR = os.getenv("VOICE_SKALLEPAR", "NHVO1d5lgqVtAvyYNL2P")
-VOICE_BENRANGEL = os.getenv("VOICE_BENRANGEL", "S6pZEFGfrgnWx4AETPdD")
+SKALLE = "Skalle-Pär"
+BEN = "Benrangel"
 
 SYSTEM_PROMPT = (
-    "Du är två sarkastiska skelett – Skalle-pär och Benrangel – som står på marken i sitt rangliga skjul på en parkering och roastar förbipasserande.\n"
-    "Du kommer att få en bild som kontext; gör ditt jobb enligt instruktionerna nedan.\n"
-    "\n"
-    "VIKTIG BEGRÄNSNING (högsta prioritet):\n"
-    "• Ni får ALDRIG kommentera, nämna eller skämta om bilar, fordon, uppfarter, garage, hus eller byggnader mittemot.\n"
-    "• Om sådant syns i bilden, ignorera det helt och skämta istället om vädret, parkeringen, varandra, skjulet, väntan eller något neutralt i scenen.\n"
-    "\n"
-    "MÅL: En kvick, publikvänlig och rolig tvåraders dialog på svenska.\n"
-    "\n"
-    "FORMAT (obligatoriskt):\n"
-    "1) Skalle-pär: <en (1) mening>\n"
-    "2) Benrangel: <en (1) mening>\n"
-    "Exakt två meningar totalt. Inga extra rader, inga emojis.\n"
-    "\n"
-    "STIL:\n"
-    "• Tonen är som ett snabbt gaturoast mellan två komiker som råkar vara skelett.\n"
-    "• De låter bittra, självironiska och kvicka, med mörk humor och torr leverans.\n"
-    "• Skämta främst om det ni ser: färger på kläder, poser, rörelser, attityder och små detaljer i scenen.\n"
-    "• Blanda gärna in egna skelettproblem – knakande leder, brist på muskler, evig väntan i skjulet.\n"
-    "• Ni kan nämna varandras namn naturligt i början eller mitten av meningen (inte i slutet).\n"
-    "• Aldrig skämt om känsliga attribut (ålder, kropp, hälsa, religion, etnicitet, identitet).\n"
-    "\n"
-    "FALLBACK NÄR BILDEN ÄR OKLAR ELLER INGET HÄNDER:\n"
-    "• Om ni inte ser något tydligt att kommentera, skämta om skjulet, parkeringen, vädret, era benknotor eller den oändliga tristessen.\n"
-    "\n"
-    "STENHÅRDA REGLER (inga undantag):\n"
-    "• Gör ALDRIG meta-referenser till kamera, bild, AI, modell, detektion, YOLO, neurala nät, algoritmer eller 'jag ser'.\n"
-    "• Ni står alltid på marken, så kommentera scenen rakt framifrån – aldrig som om ni tittade uppifrån.\n"
-    "• Påstå inte hur ni vet saker – ni bara snackar som två skelett som hänger i sitt skjul.\n"
-    "• Inga uppmaningar, inga förklaringar, ingen extra text före/efter replikerna.\n"
-    "• Gör inte antaganden om personliga attribut.\n"
-    "• Gör INGA kommentarer eller skämt om bilar, fordon, uppfarter, garage eller hus – ersätt alltid med något neutralt.\n"
-    "\n"
-    "EXTRA HUMORISTISK TON:\n"
-    "• Skämten ska kännas kvicka och oväntade, gärna med små ordlekar eller absurda observationer.\n"
-    "• Låt Skalle-pär och Benrangel pika varandra lika mycket som de roastar förbipasserande.\n"
-    "• Håll tajming och energi – som om de tävlar om vem som får publiken att skratta mest.\n"
-    "\n"
-    "OM NÅGON REGEL BRYTS: skriv om direkt tills allt följer reglerna.\n"
+    "Ni är två skelett, Skalle-Pär och Benrangel, som hänger utanför ett hus på Halloween "
+    "och pratar med barnen som kommer för bus eller godis.\n"
+    "Du får en bild av vem som står framför er, och ibland något som någon just sa. "
+    "Skriv en kort dialog på svenska: Skalle-Pär säger en replik, sedan Benrangel. Max 15 ord per replik.\n"
+    "Ton: busig, spöklik och snäll. Barnen ska skratta, inte bli ledsna. Skoja om utklädnader, färger, "
+    "poser, godispåsar, vädret eller era egna knarrande ben. Gärna ordvitsar och små överdrifter.\n"
+    "Om någon sa något: svara på det, gärna med en motfråga eller en liten utmaning så att samtalet fortsätter.\n"
+    "Aldrig: elakt om utseende eller kropp, inget om bilar, hus eller grannar, och säg aldrig att ni ser via "
+    "kamera eller bild eller att ni är en AI. Fråga aldrig efter namn eller var barnen bor.\n"
+    "Ser du inga barn tydligt: skoja om väntan, om varandra eller om spöken.\n"
+    "Upprepa inte skämt från listan över tidigare repliker."
 )
 
+ROAST_FORMAT = {
+    "type": "json_schema",
+    "name": "skelett_dialog",
+    "strict": True,
+    "schema": {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["skallepar", "benrangel"],
+        "properties": {
+            "skallepar": {"type": "string", "description": "Skalle-Pärs replik"},
+            "benrangel": {"type": "string", "description": "Benrangels replik"},
+        },
+    },
+}
 
-SPEAKER_REGEX = re.compile(r'^\s*(Skalle[\-\s]?pär|Benrangel)\s*[:\-]\s*(.+?)\s*$', re.IGNORECASE | re.MULTILINE)
-NAME_AT_END_REGEX = re.compile(r'[\s\-,:]*\b(Skalle[\-\s]?pär|Benrangel)\b[\s\.\!\?]*$', re.IGNORECASE)
 
-def _normalize_text(s: str) -> str:
-    s = unicodedata.normalize("NFKC", s)
-    s = s.replace("–", "-").replace("—", "-")
-    s = s.replace(":s", ":")
-    return s
+def _user_text(transcript, dialogue, recent_jokes, has_image: bool = True) -> str:
+    parts = []
+    if dialogue:
+        parts.append("Samtalet hittills:")
+        for child, sk, be in dialogue:
+            if child:
+                parts.append(f"Barn: {child}")
+            parts.append(f"{SKALLE}: {sk}")
+            parts.append(f"{BEN}: {be}")
+        parts.append("")
+    if transcript:
+        parts.append(f'Någon sa just: "{transcript}"')
+        parts.append("Svara på det" + (", och koppla gärna till vad ni ser i bilden." if has_image else "."))
+    else:
+        parts.append("Här kommer några nya. Kommentera det ni ser i bilden." if has_image
+                     else "Ni ser ingen just nu. Skoja om väntan, mörkret eller varandra.")
+    if recent_jokes:
+        parts.append("")
+        parts.append("Tidigare repliker (upprepa inte):")
+        for sk, be in recent_jokes:
+            parts.append(f"- {sk} / {be}")
+    return "\n".join(parts)
 
-def _clean_line(text: str) -> str:
-    text = text.strip().strip('“”’‘"\'`')
-    text = NAME_AT_END_REGEX.sub("", text).strip()
-    return text
 
-def assign_alternating_voices(raw: str, voice_skallepar: str = VOICE_SKALLEPAR, voice_benrangel: str = VOICE_BENRANGEL):
-    raw = _normalize_text(raw)
-    matches = SPEAKER_REGEX.findall(raw)
-
-    if len(matches) < 2:
-        # Fallback: split by lines if the labels are missing but still two lines
-        lines = [ln.strip() for ln in raw.splitlines() if ln.strip()]
-        if len(lines) >= 2:
-            first_text = _clean_line(re.sub(r'^\s*Skalle[\-\s]?pär\s*[:\-]\s*', '', lines[0], flags=re.I))
-            second_text = _clean_line(re.sub(r'^\s*Benrangel\s*[:\-]\s*', '', lines[1], flags=re.I))
-            return [(voice_skallepar, first_text), (voice_benrangel, second_text)]
-        return []
-
-    spk_map = {"skalle-pär": None, "benrangel": None}
-    for spk, content in matches:
-        key = spk.lower().replace("skalle pär", "skalle-pär")
-        txt = _clean_line(content)
-        if "skalle" in key and spk_map["skalle-pär"] is None:
-            spk_map["skalle-pär"] = txt
-        elif "benrangel" in key and spk_map["benrangel"] is None:
-            spk_map["benrangel"] = txt
-
-    if spk_map["skalle-pär"] is None or spk_map["benrangel"] is None:
-        return []
-
-    return [
-        (voice_skallepar, spk_map["skalle-pär"]),
-        (voice_benrangel, spk_map["benrangel"]),
-    ]
-
-def generate_roast_from_image(img_b64: str) -> str:
-    """
-    Single-call vision → roast.
-    Uses SYSTEM_PROMPT and the image as context to produce exactly two lines.
-    """
-    rsp = client.responses.create(
-        model="gpt-4o-mini",
+def generate_lines(
+    img_b64: str | None,
+    *,
+    model: str,
+    effort: str | None = "none",
+    detail: str = "auto",
+    transcript: str | None = None,
+    dialogue=(),
+    recent_jokes=(),
+    timeout: float = 20.0,
+    service_tier: str | None = None,
+) -> tuple[str, str]:
+    """One call: image (+ optional transcript) -> (Skalle-Pär line, Benrangel line). Raises on failure."""
+    content = [{"type": "input_text", "text": _user_text(transcript, dialogue, recent_jokes, bool(img_b64))}]
+    if img_b64:
+        content.append({"type": "input_image", "image_url": f"data:image/jpeg;base64,{img_b64}", "detail": detail})
+    kwargs = dict(
+        model=model,
         instructions=SYSTEM_PROMPT,
-        input=[{
-            "role": "user",
-            "content": [
-                {"type": "input_text",
-                 "text": (
-                    "Du får nu en bild som kontext. Skriv roast enligt system prompten.\n"
-                    "Följ formatet exakt med två meningar och rätt talarnamn."
-                 )},
-                {"type": "input_image", "image_url": f"data:image/jpeg;base64,{img_b64}"},
-            ],
-        }],
-        max_output_tokens=120,
+        input=[{"role": "user", "content": content}],
+        text={"format": ROAST_FORMAT},
+        max_output_tokens=200,
+        timeout=timeout,
     )
-    return rsp.output_text.strip()
+    if effort and not model.startswith("gpt-4"):
+        kwargs["reasoning"] = {"effort": effort}
+    if service_tier:
+        kwargs["service_tier"] = service_tier
+    rsp = client.responses.create(**kwargs)
+    raw = (rsp.output_text or "").strip()
+    if not raw:
+        raise RuntimeError("tomt svar från modellen")
+    data = json.loads(raw)
+    sk = str(data.get("skallepar", "")).strip()
+    be = str(data.get("benrangel", "")).strip()
+    if not sk or not be:
+        raise RuntimeError(f"ofullständigt svar: {raw[:120]}")
+    return sk, be
 
-def voices_for_image_roast(img_b64: str):
-    """
-    Convenience: returns [(voice_id, text), (voice_id, text)] ready for TTS.
-    """
-    raw = generate_roast_from_image(img_b64)
-    return assign_alternating_voices(raw)
+
+def warmup(model: str) -> str | None:
+    """Validate the model id and open the HTTPS connection. Returns an error string or None."""
+    try:
+        client.models.retrieve(model)
+        return None
+    except Exception as e:
+        return short_err(e)

@@ -1,21 +1,60 @@
+# camroast/vision.py
+import base64
+
 import cv2
 import numpy as np
 
 
-def encode_jpg(frame: np.ndarray) -> bytes:
-    ok, buf = cv2.imencode(".jpg", frame)
+def encode_jpg(frame: np.ndarray, quality: int = 85) -> bytes:
+    ok, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), int(quality)])
     return buf.tobytes() if ok else b""
 
 
-def annotate_and_labels(frame: np.ndarray, results):
-    annotated = results.plot()
-    labels = {results.names[int(b.cls)] for b in results.boxes}
-    y = 20
-    for lbl in sorted(labels):
-        cv2.putText(annotated, lbl, (10, y),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
-        y += 22
-    return annotated, labels
+def resize_max_side(frame: np.ndarray, max_side: int) -> np.ndarray:
+    h, w = frame.shape[:2]
+    m = max(h, w)
+    if max_side <= 0 or m <= max_side:
+        return frame
+    scale = max_side / float(m)
+    return cv2.resize(frame, (max(1, int(w * scale)), max(1, int(h * scale))), interpolation=cv2.INTER_AREA)
+
+
+def to_b64_jpg(frame: np.ndarray, max_side: int = 1024, quality: int = 85) -> str:
+    return base64.b64encode(encode_jpg(resize_max_side(frame, max_side), quality)).decode("ascii")
+
+
+def person_boxes(results):
+    """(x1, y1, x2, y2, conf) for every person box in a YOLO result."""
+    out = []
+    if results is None or getattr(results, "boxes", None) is None:
+        return out
+    for b in results.boxes:
+        if results.names[int(b.cls)] != "person":
+            continue
+        x1, y1, x2, y2 = (int(v) for v in b.xyxy[0].tolist())
+        out.append((x1, y1, x2, y2, float(b.conf[0])))
+    return out
+
+
+def crop_to_persons(frame: np.ndarray, boxes, margin: float = 0.35, min_frac: float = 0.45) -> np.ndarray:
+    """Crop around all person boxes with some margin, never smaller than min_frac of the frame."""
+    h, w = frame.shape[:2]
+    if not boxes:
+        return frame
+    x1 = min(b[0] for b in boxes)
+    y1 = min(b[1] for b in boxes)
+    x2 = max(b[2] for b in boxes)
+    y2 = max(b[3] for b in boxes)
+    cw = max((x2 - x1) * (1 + 2 * margin), w * min_frac)
+    ch = max((y2 - y1) * (1 + 2 * margin), h * min_frac)
+    cx, cy = (x1 + x2) / 2.0, (y1 + y2) / 2.0
+    X1 = int(max(0, cx - cw / 2))
+    Y1 = int(max(0, cy - ch / 2))
+    X2 = int(min(w, cx + cw / 2))
+    Y2 = int(min(h, cy + ch / 2))
+    if X2 - X1 < 32 or Y2 - Y1 < 32:
+        return frame
+    return frame[Y1:Y2, X1:X2]
 
 
 def is_dark(frame: np.ndarray, thresh: float = 40.0) -> bool:
@@ -24,14 +63,7 @@ def is_dark(frame: np.ndarray, thresh: float = 40.0) -> bool:
 
 
 def has_person_box(results) -> bool:
-    return any(results.names[int(b.cls)] == "person" for b in results.boxes)
-
-
-def is_interesting(results, motion_pixels: int) -> bool:
-    if motion_pixels < 1500:
-        return False
-    has_person = any(results.names[int(b.cls)] == "person" for b in results.boxes)
-    return has_person
+    return bool(person_boxes(results))
 
 
 def _gamma_lut(gamma: float):
@@ -41,23 +73,16 @@ def _gamma_lut(gamma: float):
 
 
 def enhance_low_light(frame: np.ndarray, clahe_clip: float = 2.0, tile_grid: tuple = (8, 8), gamma: float = 0.6) -> np.ndarray:
-    # Apply CLAHE on L channel
     lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)
     l, a, b = cv2.split(lab)
     clahe = cv2.createCLAHE(clipLimit=clahe_clip, tileGridSize=tile_grid)
-    l2 = clahe.apply(l)
-    lab2 = cv2.merge((l2, a, b))
-    out = cv2.cvtColor(lab2, cv2.COLOR_LAB2BGR)
-    # Gamma correction
-    lut = _gamma_lut(gamma)
-    out = cv2.LUT(out, lut)
-    return out
+    out = cv2.cvtColor(cv2.merge((clahe.apply(l), a, b)), cv2.COLOR_LAB2BGR)
+    return cv2.LUT(out, _gamma_lut(gamma))
 
 
 def maybe_enhance_for_dark(frame: np.ndarray, dark_thresh: float = 40.0) -> np.ndarray:
     try:
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        if float(gray.mean()) < dark_thresh:
+        if is_dark(frame, dark_thresh):
             return enhance_low_light(frame)
     except Exception:
         pass

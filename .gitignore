@@ -4,3 +4,5 @@
 .env
 media/
 cache_audio/
+__pycache__/
+*.pyc

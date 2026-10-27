@@ -2,7 +2,7 @@
 .media
 .cache_audio
 .env
-media/
 cache_audio/
 __pycache__/
 *.pyc
+models/

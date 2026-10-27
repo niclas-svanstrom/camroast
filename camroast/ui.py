@@ -200,12 +200,13 @@ def draw_ui_overlay(frame, state, s=None):
     now = time.time()
     font_path = getattr(s, "subtitle_font", None) if s is not None else None
     pad, btn_w, btn_h = 8, 140, 32
-    rects = [(pad + i * (btn_w + pad), pad, pad + i * (btn_w + pad) + btn_w, pad + btn_h) for i in range(4)]
-    state._roast_rect, state._now_rect, state._mic_rect, state._premade_rect = rects
+    rects = [(pad + i * (btn_w + pad), pad, pad + i * (btn_w + pad) + btn_w, pad + btn_h) for i in range(5)]
+    state._roast_rect, state._now_rect, state._mic_rect, state._premade_rect, state._tts_rect = rects
     _draw_button(frame, rects[0], f"Roast: {'ON' if state.roast_enabled else 'OFF'}", active=state.roast_enabled)
     _draw_button(frame, rects[1], "Roast Now")
     _draw_button(frame, rects[2], f"Mic: {'ON' if state.mic_mode_enabled else 'OFF'}", active=state.mic_mode_enabled)
     _draw_button(frame, rects[3], "Premade Now")
+    _draw_button(frame, rects[4], f"TTS: {state.tts_label or '-'}", active=state.tts_label not in ("", "Eleven"))
 
     small = max(16, w // 50)
     big = max(20, w // 36)
@@ -238,12 +239,12 @@ def draw_ui_overlay(frame, state, s=None):
         color = (80, 80, 80) if state.mic_muted else ((0, 220, 0) if state.mic_active else (0, 120, 0))
         cv2.circle(frame, (mx1 - 10, cy), 6, color, -1)
         if state.mic_status:
-            draw_text(frame, state.mic_status, (rects[3][2] + 12, my1 + 4), small - 2, (220, 220, 0), font_path)
+            draw_text(frame, state.mic_status, (rects[-1][2] + 12, my1 + 4), small - 2, (220, 220, 0), font_path)
 
     # Tapo indicators
     if state.tapo_ok or state.tapo_human_recent or state.tapo_motion_recent:
-        tx = rects[3][2] + 12
-        ty = rects[3][3] + 6
+        tx = rects[-1][2] + 12
+        ty = rects[-1][3] + 6
         cv2.putText(frame, "Tapo", (tx, ty + 12), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
         cx, cy = tx + 60, ty + 7
         cv2.circle(frame, (cx, cy), 6, (0, 220, 0) if state.tapo_human_recent else (80, 80, 80), -1)

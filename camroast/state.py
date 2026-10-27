@@ -16,6 +16,8 @@ class UIState:
     _now_rect: tuple | None = None
     _mic_rect: tuple | None = None
     _premade_rect: tuple | None = None
+    _tts_rect: tuple | None = None
+    tts_label: str = ""              # current voice provider, shown on the TTS button
     # live status
     show_state: str = "idle"          # idle | generating | transcribing | speaking | premade
     armed: bool = True

@@ -11,7 +11,7 @@ import time
 import cv2
 import numpy as np
 
-from . import llm
+from . import llm, tts
 from .camera import CameraSource
 from .premade import load_audio_files, load_premade_pairs
 from .presence import PresenceTracker
@@ -137,6 +137,8 @@ class CameraApp:
             self.ui.request_premade_now = True
         elif inside(self.ui._mic_rect):
             self.toggle_mic()
+        elif inside(self.ui._tts_rect):
+            self.toggle_tts()
 
     def _on_key(self, key):
         if key == ord("r"):
@@ -147,6 +149,19 @@ class CameraApp:
             self.ui.request_premade_now = True
         elif key == ord("m"):
             self.toggle_mic()
+        elif key == ord("t"):
+            self.toggle_tts()
+
+    def toggle_tts(self):
+        """Switch the skeleton voices between ElevenLabs and Piper (takes effect from the next line)."""
+        if self.show is None:
+            return
+        sp = self.show.speaker
+        name = sp.toggle()
+        self.ui.tts_label = tts.SHORT[name]
+        # load the provider in the background so the next joke does not wait for it
+        if name == "piper":
+            sp.providers["piper"].preload()
 
     def toggle_mic(self):
         if self.ui.mic_mode_enabled:
@@ -190,11 +205,13 @@ class CameraApp:
             self.show.error(f"OpenAI: {err}")
         else:
             print(f"OpenAI ok: {self.s.llm_model} (reasoning={self.s.llm_reasoning_effort or 'default'})")
-        err = await asyncio.to_thread(self.show.speaker.warmup)
-        if err:
-            self.show.error(f"ElevenLabs: {err}")
-        else:
-            print(f"ElevenLabs ok: {self.s.tts_model} / {self.s.tts_output_format}")
+        for label, err in await asyncio.to_thread(self.show.speaker.warmup):
+            if err:
+                self.show.error(label, RuntimeError(err))
+            elif label == "ElevenLabs":
+                print(f"ElevenLabs ok: {self.s.tts_model} / {self.s.tts_output_format}")
+            elif label == "Piper":
+                print(f"Piper ok: {self.s.piper_voice_skallepar} / {self.s.piper_voice_benrangel}")
 
     # ---- main loop
     async def run(self, cam=0):
@@ -209,6 +226,9 @@ class CameraApp:
         filler = load_audio_files(self.s.filler_dir)
         print(f"premade pairs: {len(premade)}, attention clips: {len(attention)}, filler clips: {len(filler)}")
         self.show = ShowRunner(self.s, self.ui, self.presence, self._get_voice, premade, attention, filler)
+        self.ui.tts_label = tts.SHORT[self.show.speaker.provider]
+        self.show.speaker.preload()
+        print(f"TTS: {self.show.speaker.label}" + (" (Piper as backup)" if self.s.tts_fallback_piper and self.show.speaker.provider != 'piper' else ""))
         asyncio.create_task(self._warmup())
         if self.s.mic_autostart:
             self.toggle_mic()
@@ -381,7 +401,8 @@ class CameraApp:
         use_tapo = self._tapo is not None and (dark or not self.s.tapo_use_only_when_dark)
         if self.presence.confirmed(now) or (use_tapo and self.ui.tapo_human_recent):
             fr, bx = self._best_frame(proc, boxes)
-            print(f"show: auto ({len(bx)} person(s))")
+            why = f", {self.presence.rearm_reason}" if self.presence.rearm_reason else ""
+            print(f"show: auto ({len(bx)} person(s){why})")
             show.start_roast(fr, bx)
 
     def _premade_mic_trigger(self, now, v, dark, boxes):

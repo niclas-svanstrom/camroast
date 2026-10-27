@@ -26,7 +26,14 @@ class PresenceTracker:
         self.last_seen: float | None = None    # last detection of any person
         self.last_show_end: float | None = None
         self.count = 0
+        self.show_count = 0                    # people in view when the last show started
+        self.rearm_reason = ""
         self._armed = True
+        self._more_since: float | None = None  # start of a stretch with more people than show_count
+        self._more_last: float | None = None   # last detection in that stretch with more people
+        self._more_hits = 0                    # detections in the stretch with more people / all of them
+        self._more_seen = 0
+        self._fewer_since: float | None = None  # start of a stretch with fewer people than show_count
         self._cands: deque = deque()           # (ts, score, frame, boxes) within best_frame_window_sec
 
     # ---- updates
@@ -42,9 +49,57 @@ class PresenceTracker:
         cutoff = now - self.s.best_frame_window_sec
         while self._cands and self._cands[0][0] < cutoff:
             self._cands.popleft()
+        self._track_count(now)
         if not self._armed and self.last_show_end is not None:
-            if (now - self.last_show_end) >= self.s.rearm_same_scene_sec or self.clear_since_show(now) >= self.s.rearm_clear_sec:
-                self._armed = True
+            if self.clear_since_show(now) >= self.s.rearm_clear_sec:
+                self._rearm("scene cleared")
+            elif self.s.rearm_more_people and self._more_confirmed(now):
+                self._rearm("more people")
+            elif (now - self.last_show_end) >= self.s.rearm_same_scene_sec:
+                self._rearm("same group")
+
+    def _rearm(self, reason: str):
+        self._armed = True
+        self.rearm_reason = reason
+
+    def _track_count(self, now: float):
+        """Compare the head count with the last show's: newcomers can shorten the wait for the next joke."""
+        gap = self.s.person_gap_sec
+        # Some of the group left: once that has held for rearm_clear_sec, count from the people still here.
+        if self.count < self.show_count:
+            if self._fewer_since is None:
+                self._fewer_since = now
+            elif now - self._fewer_since >= self.s.rearm_clear_sec:
+                self.show_count = max((len(c[3]) for c in self._cands), default=self.count)
+                self._fewer_since = None
+        else:
+            self._fewer_since = None
+
+        more = self.count > self.show_count
+        if more and (self._more_since is None or (now - self._more_last) > gap):
+            self._more_since, self._more_hits, self._more_seen = now, 0, 0
+        if self._more_since is None:
+            return
+        if not more and (now - self._more_last) > gap:
+            self._more_since = None
+            return
+        self._more_seen += 1
+        if more:
+            self._more_hits += 1
+            self._more_last = now
+
+    def _more_confirmed(self, now: float) -> bool:
+        """More people than at the last show, seen for person_confirm_sec in at least two thirds of
+        the detections, so a flickering extra box is not taken for a newcomer."""
+        return (self._more_since is not None and (now - self._more_last) <= self.s.person_gap_sec
+                and (self._more_last - self._more_since) >= self.s.person_confirm_sec
+                and 3 * self._more_hits >= 2 * self._more_seen)
+
+    def on_show_start(self, now: float):
+        """Remember how many people the show is for. Uses the most seen in the last second, so a
+        missed box right at the start does not make the same group look like newcomers later."""
+        self.show_count = max((len(c[3]) for c in self._cands), default=self.count)
+        self._more_since = self._fewer_since = None
 
     def on_show_end(self, now: float):
         self.last_show_end = now
@@ -68,13 +123,15 @@ class PresenceTracker:
             return float("inf")
         return now - max(anchors)
 
+    # Measured up to the last detection, not to now, so the gap tolerance cannot stretch a short glitch.
     def confirm_progress(self, now: float) -> float:
         if self.first_seen is None or not self.present(now):
             return 0.0
-        return max(0.0, min(1.0, (now - self.first_seen) / max(0.05, self.s.person_confirm_sec)))
+        return max(0.0, min(1.0, (self.last_seen - self.first_seen) / max(0.05, self.s.person_confirm_sec)))
 
     def confirmed(self, now: float) -> bool:
-        return self.present(now) and self.first_seen is not None and (now - self.first_seen) >= self.s.person_confirm_sec
+        return (self.present(now) and self.first_seen is not None
+                and (self.last_seen - self.first_seen) >= self.s.person_confirm_sec)
 
     def best(self):
         """(frame, boxes) of the best-looking recent frame with people in it, or None."""

@@ -1,7 +1,7 @@
 # camroast/show.py
 """The show: everything that happens once the skeletons decide to speak.
 
-Runs as an asyncio task so the camera loop keeps going. Slow work (OpenAI, ElevenLabs,
+Runs as an asyncio task so the camera loop keeps going. Slow work (OpenAI, text to speech,
 audio playback) happens in worker threads via asyncio.to_thread.
 """
 import asyncio
@@ -24,7 +24,7 @@ class ShowRunner:
         self.premade_pairs = premade_pairs
         self.attention_files = attention_files
         self.filler_files = filler_files or attention_files
-        self.speaker = tts.Speaker(s)
+        self.speaker = tts.Speaker(s, on_error=self.error)
         self.recent_jokes: deque = deque(maxlen=max(1, s.joke_history_size))
         self.dialogue: deque = deque(maxlen=max(1, s.dialogue_history_size))
         self._dialogue_ts = 0.0
@@ -60,6 +60,7 @@ class ShowRunner:
             coro.close()
             return False
         self._task = asyncio.create_task(self._guard(coro))
+        self.presence.on_show_start(time.time())
         return True
 
     async def _guard(self, coro):
@@ -151,22 +152,20 @@ class ShowRunner:
 
         sk, be = lines
         print(f"[{time.time() - t0:.1f}s] {SKALLE}: {sk}\n{' ' * 7}{BEN}: {be}")
-        prefetch = asyncio.create_task(asyncio.to_thread(self.speaker.prefetch, be, self.s.voice_benrangel))
+        prefetch = asyncio.create_task(asyncio.to_thread(self.speaker.prefetch, tts.BEN, be))
         await self._wait_channel(clip, 4.0)
         self.ui.show_state = "speaking"
         spoke = False
         try:
-            await asyncio.to_thread(self.speaker.speak_stream, sk, self.s.voice_skallepar, lambda: self._subtitle(SKALLE, sk))
+            await asyncio.to_thread(self.speaker.speak_stream, tts.SKALLE, sk, lambda: self._subtitle(SKALLE, sk))
             spoke = True
             try:
-                data = await prefetch
-            except Exception as e:
-                self.error("TTS", e)
-                data = b""
-            if data:
-                await asyncio.to_thread(self.speaker.speak_bytes, data, lambda: self._subtitle(BEN, be))
-        except Exception as e:
-            self.error("TTS", e)
+                ben_clip = await prefetch
+            except Exception:
+                ben_clip = None  # already reported by the speaker
+            if ben_clip is not None:
+                await asyncio.to_thread(self.speaker.play_clip, ben_clip, lambda: self._subtitle(BEN, be))
+        except Exception:
             prefetch.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
         if not spoke:
             # the voices are down: let the skeletons say something anyway

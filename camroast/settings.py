@@ -36,6 +36,14 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+def _env_opt_int(name: str) -> int | None:
+    v = _env_str(name)
+    try:
+        return int(v) if v is not None else None
+    except ValueError:
+        return None
+
+
 def _env_bool(name: str, default: bool) -> bool:
     v = _env_str(name)
     if v is None:
@@ -87,6 +95,7 @@ class Settings:
     best_frame_window_sec: float = _env_float("BEST_FRAME_WINDOW_SEC", 1.0)
     rearm_clear_sec: float = _env_float("REARM_CLEAR_SEC", 3.0)           # scene empty this long -> ready for the next group
     rearm_same_scene_sec: float = _env_float("REARM_SAME_SCENE_SEC", 30.0)  # same group still there -> next joke after this long
+    rearm_more_people: bool = _env_bool("REARM_MORE_PEOPLE", True)         # more people than at the last joke, seen PERSON_CONFIRM_SEC -> ready
 
     # --- Jokes (OpenAI)
     llm_model: str = _env_str("LLM_MODEL", "gpt-6-luna")
@@ -96,6 +105,21 @@ class Settings:
     llm_service_tier: str | None = _env_str("LLM_SERVICE_TIER")            # "priority" = lowest latency, higher price
     llm_timeout_sec: float = _env_float("LLM_TIMEOUT_SEC", 20.0)
     joke_history_size: int = _env_int("JOKE_HISTORY_SIZE", 6)
+
+    # --- Voices: provider choice
+    tts_provider: str = (_env_str("TTS_PROVIDER", "elevenlabs") or "elevenlabs").lower()  # elevenlabs | piper
+    tts_fallback_piper: bool = _env_bool("TTS_FALLBACK_PIPER", False)      # 1 = Piper instead of a premade pair when ElevenLabs fails
+    tts_retry_sec: float = _env_float("TTS_RETRY_SEC", 60.0)               # skip a failed provider this long
+
+    # --- Voices (Piper, local)
+    piper_dir: str = _env_str("PIPER_DIR", "models/piper")
+    piper_voice_skallepar: str = _env_str("PIPER_VOICE_SKALLEPAR", "sv_SE-nst-medium")   # male
+    piper_voice_benrangel: str = _env_str("PIPER_VOICE_BENRANGEL", "sv_SE-lisa-medium")  # female
+    piper_speed_skallepar: float = _env_float("PIPER_SPEED_SKALLEPAR", 1.1)  # >1 slower, <1 faster
+    piper_speed_benrangel: float = _env_float("PIPER_SPEED_BENRANGEL", 1.0)
+    piper_speaker_skallepar: int | None = _env_opt_int("PIPER_SPEAKER_SKALLEPAR")  # only for multi-speaker models
+    piper_speaker_benrangel: int | None = _env_opt_int("PIPER_SPEAKER_BENRANGEL")
+    piper_threads: int = _env_int("PIPER_THREADS", 2)
 
     # --- Voices (ElevenLabs)
     tts_model: str = _env_str("ELEVEN_MODEL", "eleven_flash_v2_5")

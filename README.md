@@ -2,7 +2,7 @@
 
 Two skeletons, Skalle-Pär and Benrangel, watch the porch through a camera and comment on
 the trick-or-treaters in Swedish. Jokes come from OpenAI (gpt-6-luna by default), the voices
-from ElevenLabs. With the mic on, the skeletons also answer what people say.
+from ElevenLabs or from Piper, a free local voice engine. With the mic on, the skeletons also answer what people say.
 
 ## Run
 
@@ -28,11 +28,23 @@ Buttons in the window or keys:
 | n   | Roast now |
 | m   | Mic on/off (talk-back) |
 | p   | Play a premade pair |
+| t   | Switch voices: ElevenLabs / Piper |
 | q   | Quit |
 
 The status line shows what is going on (Tänker, Pratar, Redo, Väntar på nya barn), the
 frame rate and YOLO time. Subtitles at the bottom show what the skeletons say while they
 say it, and what the mic heard.
+
+## Voices
+
+- **ElevenLabs** is what the skeletons use on Halloween. It needs `ELEVENLABS_API_KEY`, a key
+  that starts with `sk_`. The app uses the Flash v2.5 model, about 160 characters per show.
+- **Piper** is free and runs locally on the CPU, handy for testing without using credits.
+  Skalle-Pär uses the Swedish male voice `sv_SE-nst-medium`, Benrangel the female
+  `sv_SE-lisa-medium`. The voices download to `models/piper` the first time.
+
+`TTS_PROVIDER` picks the start voice and the TTS button (or t) switches live. If ElevenLabs
+fails, a premade pair plays instead; `TTS_FALLBACK_PIPER=1` says the line with Piper instead.
 
 ## How a show works
 
@@ -41,13 +53,15 @@ say it, and what the mic heard.
 3. The model returns one line per skeleton as JSON. Skalle-Pär's line streams from ElevenLabs
    straight to the speaker while Benrangel's line is fetched in parallel.
 4. Afterwards the skeletons wait until the scene has been empty for `REARM_CLEAR_SEC`, or
-   `REARM_SAME_SCENE_SEC` if the same group stays.
+   `REARM_SAME_SCENE_SEC` if the same group stays. If more people are in view than when the
+   last show started, steadily for `PERSON_CONFIRM_SEC`, the next show starts right away
+   (`REARM_MORE_PEOPLE`).
 
 Talk-back: the mic is segmented into utterances by a voice activity detector, transcribed with
 `gpt-4o-mini-transcribe`, and the transcript plus the current frame go to the model. The mic is
 muted while the skeletons talk so they never answer themselves.
 
-If OpenAI or ElevenLabs fail, a premade pair from `media/premade` plays instead and the error
+If OpenAI (jokes) or ElevenLabs (voices) fail, a premade pair from `media/premade` plays instead and the error
 shows on screen for a few seconds.
 
 ## Layout

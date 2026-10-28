@@ -104,6 +104,9 @@ class ShowRunner:
     # ---- flows
     async def _talkback(self, audio, rate, frame, boxes):
         self.ui.show_state = "transcribing"
+        self._mute(True)  # the filler clip must not be heard as a child talking
+        # start the filler right away, so the speech-to-text time is not silent
+        clip = await asyncio.to_thread(play_random_attention, self.filler_files)
         t0 = time.time()
         try:
             text = await asyncio.to_thread(stt.transcribe, audio, rate, model=self.s.stt_model, language=self.s.stt_language)
@@ -115,12 +118,13 @@ class ShowRunner:
             return
         self.ui.child_text = text
         self.ui.child_text_until = time.time() + 20.0
-        await self._roast(frame, boxes, transcript=text)
+        await self._roast(frame, boxes, transcript=text, clip=clip)
 
-    async def _roast(self, frame, boxes, transcript: str | None = None):
+    async def _roast(self, frame, boxes, transcript: str | None = None, clip=None):
         self.ui.show_state = "generating"
         self._mute(True)  # the attention clip must not be heard as a child talking
-        clip = await asyncio.to_thread(play_random_attention, self.filler_files if transcript else self.attention_files)
+        if clip is None:  # talk-back has already started its filler clip
+            clip = await asyncio.to_thread(play_random_attention, self.filler_files if transcript else self.attention_files)
         if time.time() - self._dialogue_ts > self.s.dialogue_reset_sec:
             self.dialogue.clear()
 

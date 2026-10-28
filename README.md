@@ -59,7 +59,9 @@ fails, a premade pair plays instead; `TTS_FALLBACK_PIPER=1` says the line with P
 
 Talk-back: the mic is segmented into utterances by a voice activity detector, transcribed with
 `gpt-4o-mini-transcribe`, and the transcript plus the current frame go to the model. The mic is
-muted while the skeletons talk so they never answer themselves.
+muted while the skeletons talk so they never answer themselves. With `MIC_DEVICE=camera` the
+mic is the RTSP camera's own (a Tapo sends 8 kHz audio when its microphone is on); its audio
+arrives late, so the mute lasts `MIC_CAMERA_LAG_MS` longer.
 
 If OpenAI (jokes) or ElevenLabs (voices) fail, a premade pair from `media/premade` plays instead and the error
 shows on screen for a few seconds.

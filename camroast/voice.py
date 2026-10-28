@@ -4,6 +4,9 @@
 VoiceListener runs in a background thread and produces complete utterances
 (16 kHz int16 numpy arrays) that the app can hand to speech-to-text. While muted
 (the skeletons are talking) all audio is discarded so they never answer themselves.
+
+MIC_DEVICE=camera listens through the RTSP camera's own mic (the audio track of
+CAM_SOURCE, read with PyAV) instead of a mic on the computer.
 """
 import math
 import queue
@@ -25,6 +28,12 @@ try:
     import torch  # type: ignore
 except Exception:
     torch = None
+try:
+    import av  # type: ignore
+except Exception:
+    av = None
+
+from .camera import mask_source
 
 RATE = 16000
 
@@ -153,14 +162,19 @@ class VoiceListener:
         self._muted = False
         self._mute_until = 0.0
         self._lock = threading.Lock()
+        self._camera = False
+        self._gen = 0  # bumped on every start, so a camera reader left from before stops
 
     # ---- lifecycle
     def start(self) -> bool:
-        if self.running or sd is None:
+        use_camera = (self.s.mic_device or "").lower() == "camera"
+        if self.running or (sd is None and not use_camera):
             return False
         if self.vad is None:
             self.vad = make_vad()
             self.backend = self.vad.name
+        if use_camera:
+            return self._start_camera()
         device = pick_input_device(self.s.mic_device)
         try:
             info = sd.query_devices(device) if device is not None else sd.query_devices(kind="input")
@@ -190,6 +204,42 @@ class VoiceListener:
         print(f"Mic: {self.backend} on {self.device_name!r} at {self.in_rate} Hz")
         return True
 
+    def _start_camera(self) -> bool:
+        src = self.s.camera_source
+        if av is None or not (isinstance(src, str) and src.startswith(("rtsp://", "rtsps://"))):
+            print("MIC_DEVICE=camera needs PyAV (pip install av) and an rtsp:// CAM_SOURCE")
+            return False
+        self._gen += 1
+        self._camera, self.device_name, self.in_rate, self.running = True, "camera", RATE, True
+        threading.Thread(target=self._camera_reader, args=(src, self._gen), daemon=True).start()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+        print(f"Mic: {self.backend} on the camera stream ({mask_source(src)})")
+        return True
+
+    def _camera_reader(self, src: str, gen: int):
+        """Feed the camera's audio track, resampled to 16 kHz mono, into the queue. Reconnects on errors."""
+        # The whole stream: a Tapo never answers a request for the audio track alone. Video is not decoded.
+        opts = {"rtsp_transport": "tcp", "fflags": "nobuffer"}
+        while self.running and gen == self._gen:
+            try:
+                with av.open(src, options=opts, timeout=(self.s.camera_timeout_sec, self.s.camera_stall_sec)) as c:
+                    res = av.AudioResampler(format="s16", layout="mono", rate=RATE)
+                    for frame in c.decode(audio=0):
+                        if not (self.running and gen == self._gen):
+                            return
+                        for f in res.resample(frame):
+                            try:
+                                self._q.put_nowait(f.to_ndarray().reshape(-1))
+                            except queue.Full:
+                                pass
+            except Exception as e:
+                if self.running and gen == self._gen:
+                    msg = mask_source(str(e).splitlines()[0] if str(e) else type(e).__name__)
+                    print(f"Camera mic: {msg}, retrying in {self.s.camera_retry_sec:g} s")
+            if self.running and gen == self._gen:
+                time.sleep(self.s.camera_retry_sec)
+
     def stop(self):
         self.running = False
         try:
@@ -202,6 +252,8 @@ class VoiceListener:
 
     # ---- gating
     def mute(self, muted: bool, tail_ms: int = 0):
+        if self._camera:
+            tail_ms += self.s.mic_camera_lag_ms  # the camera's audio arrives late, so the skeletons are still in it
         with self._lock:
             self._muted = muted
             self._mute_until = float("inf") if muted else time.time() + tail_ms / 1000.0

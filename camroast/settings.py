@@ -136,6 +136,7 @@ class Settings:
     mic_min_speech_ms: int = _env_int("MIC_MIN_SPEECH_MS", 250)
     mic_max_utterance_sec: float = _env_float("MIC_MAX_UTTERANCE_SEC", 8.0)
     mic_mute_tail_ms: int = _env_int("MIC_MUTE_TAIL_MS", 500)
+    mic_camera_lag_ms: int = _env_int("MIC_CAMERA_LAG_MS", 2000)          # MIC_DEVICE=camera: extra mute tail for the stream delay
     mic_cooldown_sec: float = _env_float("MIC_COOLDOWN_SEC", 10.0)       # premade mode only
     mic_debug: bool = _env_bool("MIC_DEBUG", False) or _env_bool("PREM_MIC_DEBUG", False)
     prem_mic_require_dark: bool = _env_bool("PREM_MIC_REQUIRE_DARK", False)

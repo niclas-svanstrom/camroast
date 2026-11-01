@@ -132,18 +132,19 @@ class Settings:
     mic_device: str | None = _env_str("MIC_DEVICE") or _env_str("PREM_MIC_DEVICE")
     mic_autostart: bool = _env_bool("MIC_AUTOSTART", False)
     mic_action: str = _env_str("MIC_ACTION", "talkback")                 # talkback | premade
-    mic_end_silence_ms: int = _env_int("MIC_END_SILENCE_MS", 600)
+    mic_end_silence_ms: int = _env_int("MIC_END_SILENCE_MS", 900)        # kids pause mid-sentence ("öhh... en pirat")
     mic_min_speech_ms: int = _env_int("MIC_MIN_SPEECH_MS", 250)
-    mic_max_utterance_sec: float = _env_float("MIC_MAX_UTTERANCE_SEC", 8.0)
+    mic_max_utterance_sec: float = _env_float("MIC_MAX_UTTERANCE_SEC", 5.0)  # nonstop chatter is cut here and answered
     mic_mute_tail_ms: int = _env_int("MIC_MUTE_TAIL_MS", 500)
     mic_camera_lag_ms: int = _env_int("MIC_CAMERA_LAG_MS", 2000)          # MIC_DEVICE=camera: extra mute tail for the stream delay
+    mic_camera_lag_min_ms: int = _env_int("MIC_CAMERA_LAG_MIN_MS", 1300)  # MIC_DEVICE=camera: speech this long before the skeletons start is still heard
     mic_cooldown_sec: float = _env_float("MIC_COOLDOWN_SEC", 10.0)       # premade mode only
     mic_debug: bool = _env_bool("MIC_DEBUG", False) or _env_bool("PREM_MIC_DEBUG", False)
     prem_mic_require_dark: bool = _env_bool("PREM_MIC_REQUIRE_DARK", False)
     prem_mic_require_no_person: bool = _env_bool("PREM_MIC_REQUIRE_NO_PERSON", False)
     stt_model: str = _env_str("STT_MODEL", "gpt-4o-mini-transcribe")
     stt_language: str = _env_str("STT_LANGUAGE", "sv")
-    stt_min_chars: int = _env_int("STT_MIN_CHARS", 3)
+    stt_min_chars: int = _env_int("STT_MIN_CHARS", 2)                    # letters in real words: "ja" counts, "haha"/"ehh" never do
     dialogue_history_size: int = _env_int("DIALOGUE_HISTORY_SIZE", 4)
     dialogue_reset_sec: float = _env_float("DIALOGUE_RESET_SEC", 90.0)
 
@@ -151,6 +152,7 @@ class Settings:
     premade_dir: str = _env_str("PREMADE_DIR", "media/premade")
     attention_dir: str = _env_str("ATTENTION_DIR", "media/attention")
     filler_dir: str = _env_str("FILLER_DIR", "media/filler")
+    log_dir: str = _env_str("LOG_DIR", "logs")                             # joke log, one text file per day
 
     # --- Tapo/ONVIF event integration
     tapo_enable_events: bool = _env_bool("TAPO_ENABLE_EVENTS", False)

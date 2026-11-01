@@ -58,10 +58,25 @@ fails, a premade pair plays instead; `TTS_FALLBACK_PIPER=1` says the line with P
    (`REARM_MORE_PEOPLE`).
 
 Talk-back: the mic is segmented into utterances by a voice activity detector, transcribed with
-`gpt-4o-mini-transcribe`, and the transcript plus the current frame go to the model. The mic is
-muted while the skeletons talk so they never answer themselves. With `MIC_DEVICE=camera` the
-mic is the RTSP camera's own (a Tapo sends 8 kHz audio when its microphone is on); its audio
-arrives late, so the mute lasts `MIC_CAMERA_LAG_MS` longer.
+`gpt-4o-mini-transcribe`, and the transcript plus the current frame go to the model. With both
+Roast and Mic on, the voice backs up the photo: the attention clip plays the moment a new group is
+seen, the joke on the picture is requested right away, and if they said something just before the
+clip, the joke is asked again with their words (a filler clip covers the wait). Between roasts,
+anything said by someone in the picture gets its own answer with a fresh picture, so the skeletons
+can chat while they wait; voices from outside the picture are ignored (without a camera, everyone
+is answered). Nonstop chatter is cut off after `MIC_MAX_UTTERANCE_SEC` (5 s) and answered, so the
+skeletons keep going. Laughter, hums and hesitation ("haha", "mm", "ehh") get no answer; a new
+group then gets the joke on the picture alone.
+
+The mic is muted while the skeletons talk so they never answer themselves. With `MIC_DEVICE=camera`
+the mic is the RTSP camera's own (a Tapo sends 8 kHz audio when its microphone is on). Its audio
+arrives late, so the mute is shifted: it starts `MIC_CAMERA_LAG_MIN_MS` after the skeletons start
+(what came in before that was said before they did, and is kept) and lasts `MIC_CAMERA_LAG_MS`
+after they stop. `MIC_DEBUG=1` prints the real lag at every show; test alone at the camera.
+
+Every show is written to a joke log, `logs/skamt-YYYY-MM-DD.txt` (`LOG_DIR`): the time, what started
+it (picture, voice, newcomers, button), what the kids said and both lines. Premade pairs, unanswered
+laughs and errors are in it too, so afterwards you can see why it went quiet or played a premade.
 
 If OpenAI (jokes) or ElevenLabs (voices) fail, a premade pair from `media/premade` plays instead and the error
 shows on screen for a few seconds.
@@ -75,5 +90,6 @@ shows on screen for a few seconds.
 - `camroast/stt.py`, `camroast/tts.py`, `camroast/voice.py` speech in and out
 - `camroast/ui.py` overlay and subtitles
 - `camroast/premade.py` pre-recorded clips
+- `camroast/jokelog.py` the joke log
 
 All settings are documented in `.env.example`.

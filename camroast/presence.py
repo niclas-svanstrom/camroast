@@ -35,10 +35,12 @@ class PresenceTracker:
         self._more_seen = 0
         self._fewer_since: float | None = None  # start of a stretch with fewer people than show_count
         self._cands: deque = deque()           # (ts, score, frame, boxes) within best_frame_window_sec
+        self._peak = 0                         # most people seen since the last show started
 
     # ---- updates
     def update(self, now: float, boxes, frame):
         self.count = len(boxes)
+        self._peak = max(self._peak, self.count)
         if boxes:
             if self.first_seen is None or (now - self.last_seen) > self.s.person_gap_sec:
                 self.first_seen = now
@@ -52,11 +54,11 @@ class PresenceTracker:
         self._track_count(now)
         if not self._armed and self.last_show_end is not None:
             if self.clear_since_show(now) >= self.s.rearm_clear_sec:
-                self._rearm("scene cleared")
+                self._rearm("ny grupp")
             elif self.s.rearm_more_people and self._more_confirmed(now):
-                self._rearm("more people")
+                self._rearm("fler har kommit")
             elif (now - self.last_show_end) >= self.s.rearm_same_scene_sec:
-                self._rearm("same group")
+                self._rearm("samma grupp igen")
 
     def _rearm(self, reason: str):
         self._armed = True
@@ -99,11 +101,16 @@ class PresenceTracker:
         """Remember how many people the show is for. Uses the most seen in the last second, so a
         missed box right at the start does not make the same group look like newcomers later."""
         self.show_count = max((len(c[3]) for c in self._cands), default=self.count)
+        self._peak = self.show_count
         self._more_since = self._fewer_since = None
 
     def on_show_end(self, now: float):
+        """Everyone seen while the skeletons talked heard the joke: newcomers are only people beyond
+        that. In a crowd, kids hide behind each other, so the count at the start is often too low."""
         self.last_show_end = now
         self._armed = False
+        self.show_count = max(self.show_count, self._peak)
+        self._more_since = self._fewer_since = None
 
     # ---- queries
     @property

@@ -11,7 +11,7 @@ import time
 import cv2
 import numpy as np
 
-from . import llm, tts
+from . import jokelog, llm, tts
 from .camera import CameraSource
 from .premade import load_audio_files, load_premade_pairs
 from .presence import PresenceTracker
@@ -86,6 +86,32 @@ class _DetectorWorker:
             with self._lock:
                 self._result = (frame, boxes, ms)
                 self._busy = False
+
+
+def _screen_work_area():
+    """(left, top, width, height) of the desktop minus the taskbar, or None off Windows."""
+    try:
+        import ctypes
+        from ctypes import wintypes
+        r = wintypes.RECT()
+        if ctypes.windll.user32.SystemParametersInfoW(0x0030, 0, ctypes.byref(r), 0):  # SPI_GETWORKAREA
+            return r.left, r.top, r.right - r.left, r.bottom - r.top
+    except Exception:
+        pass
+    return None
+
+
+def _fit_window(w: int, h: int):
+    """Size the video window to the frame, shrunk to fit the screen with the title bar showing."""
+    area = _screen_work_area()
+    if area is None:
+        cv2.resizeWindow(WINDOW_NAME, w, h)
+        return
+    left, top, aw, ah = area
+    scale = min(1.0, 0.98 * aw / w, (ah - 48) / h)
+    ww, wh = int(w * scale), int(h * scale)
+    cv2.resizeWindow(WINDOW_NAME, ww, wh)
+    cv2.moveWindow(WINDOW_NAME, left + (aw - ww) // 2, top)
 
 
 def _init_audio():
@@ -229,17 +255,22 @@ class CameraApp:
         self.ui.tts_label = tts.SHORT[self.show.speaker.provider]
         self.show.speaker.preload()
         print(f"TTS: {self.show.speaker.label}" + (" (Piper as backup)" if self.s.tts_fallback_piper and self.show.speaker.provider != 'piper' else ""))
+        print(f"Joke log: {self.s.log_dir}/")
+        jokelog.write(self.s.log_dir, f"Start: {self.s.llm_model}, {self.show.speaker.label}, {self.camera.label}")
         asyncio.create_task(self._warmup())
         if self.s.mic_autostart:
             self.toggle_mic()
 
         if self.s.show_live:
-            cv2.namedWindow(WINDOW_NAME)
+            # Resizable, so a full HD camera stream still fits on a full HD screen.
+            # OpenCV hands the mouse callback image coordinates, so the buttons keep working.
+            cv2.namedWindow(WINDOW_NAME, cv2.WINDOW_NORMAL)
             cv2.setMouseCallback(WINDOW_NAME, self._on_mouse)
 
         last_seq = -1
         last_frame = None
         last_draw = 0.0
+        win_shape = None      # frame size the window was last fitted to
         try:
             while not self._stop:
                 # Draw on every new camera frame. Without one, still redraw ten times a second
@@ -271,6 +302,9 @@ class CameraApp:
                 self._update_ui(now, boxes)
                 draw_ui_overlay(vis, self.ui, self.s)
                 if self.s.show_live:
+                    if vis.shape[:2] != win_shape:
+                        win_shape = vis.shape[:2]
+                        _fit_window(vis.shape[1], vis.shape[0])
                     cv2.imshow(WINDOW_NAME, vis)
                     key = cv2.waitKey(1) & 0xFF
                     if key == ord("q"):
@@ -364,46 +398,62 @@ class CameraApp:
         show = self.show
         v = self._get_voice()
         if show.busy:
-            if v:
-                v.drop_pending()  # anything said while the skeletons talk is stale
-            return
+            return  # what the mic hears meanwhile belongs to the show: it uses it or drops it at the end
 
         if self.ui.request_roast_now:
             self.ui.request_roast_now = False
             fr, bx = self._best_frame(proc, boxes)
-            print("show: manual")
-            show.start_roast(fr, bx)
+            why = "Roast nu (knapp)"
+            print(f"show: {why}")
+            show.start_roast(fr, bx, why=why)
             return
         if self.ui.request_premade_now:
             self.ui.request_premade_now = False
-            print("show: premade")
-            show.start_premade()
+            why = "Förinspelat (knapp)"
+            print(f"show: {why}")
+            show.start_premade(why=why)
             return
 
+        # Roast and mic work together. The auto roast starts the moment people are seen and also
+        # answers what they said just before. Between roasts anything said gets its own answer.
+        new_group = self.ui.roast_enabled and self.presence.armed
+        use_tapo = self._tapo is not None and (dark or not self.s.tapo_use_only_when_dark)
         if v:
             if self.s.mic_action == "premade":
                 v.drop_pending()
                 if self._premade_mic_trigger(now, v, dark, boxes):
-                    print("show: premade (speech heard)")
-                    show.start_premade()
+                    why = "Förinspelat (tal hördes)"
+                    print(f"show: {why}")
+                    show.start_premade(why=why)
                     return
             else:
                 utt = v.poll_utterance()
+                if utt is not None and not self._someone_in_view(now, use_tapo):
+                    if self.s.mic_debug:
+                        print("mic: nobody in the picture, not answering")
+                    utt = None
                 if utt is not None:
                     audio, speech_sec = utt
                     fr, bx = self._best_frame(proc, boxes)
-                    print(f"show: voice ({speech_sec:.1f}s of speech)")
-                    show.start_talkback(audio, RATE, fr, bx)
+                    why = f"{'Bild + röst' if new_group else 'Röst'}, {len(bx)} pers., {speech_sec:.1f} s tal"
+                    print(f"show: {why}")
+                    show.start_talkback(audio, RATE, fr, bx, greet=new_group, why=why)
                     return
 
-        if not (self.ui.roast_enabled and self.presence.armed):
+        if not new_group:
             return
-        use_tapo = self._tapo is not None and (dark or not self.s.tapo_use_only_when_dark)
         if self.presence.confirmed(now) or (use_tapo and self.ui.tapo_human_recent):
             fr, bx = self._best_frame(proc, boxes)
-            why = f", {self.presence.rearm_reason}" if self.presence.rearm_reason else ""
-            print(f"show: auto ({len(bx)} person(s){why})")
-            show.start_roast(fr, bx)
+            reason = f", {self.presence.rearm_reason}" if self.presence.rearm_reason else ""
+            why = f"Bild, {len(bx)} pers.{reason}"
+            print(f"show: {why}")
+            show.start_roast(fr, bx, why=why)
+
+    def _someone_in_view(self, now, use_tapo) -> bool:
+        """The skeletons only answer people they can see. Without a camera they answer anyone."""
+        if not (self.camera and self.camera.live):
+            return True
+        return self.presence.recently_seen(now, self.s.person_track_sec) or (use_tapo and self.ui.tapo_human_recent)
 
     def _premade_mic_trigger(self, now, v, dark, boxes):
         if not v.speech_recent(1.0):

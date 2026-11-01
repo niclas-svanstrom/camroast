@@ -159,8 +159,9 @@ class VoiceListener:
         self._utts: queue.Queue = queue.Queue(maxsize=4)
         self._thread = None
         self._stream = None
-        self._muted = False
+        self.mute_from = 0.0      # audio processed in [mute_from, _mute_until) is ignored
         self._mute_until = 0.0
+        self._probe_t = 0.0       # MIC_DEBUG: when the skeletons last started, to measure the lag
         self._lock = threading.Lock()
         self._camera = False
         self._gen = 0  # bumped on every start, so a camera reader left from before stops
@@ -252,15 +253,27 @@ class VoiceListener:
 
     # ---- gating
     def mute(self, muted: bool, tail_ms: int = 0):
-        if self._camera:
-            tail_ms += self.s.mic_camera_lag_ms  # the camera's audio arrives late, so the skeletons are still in it
+        """Ignore the mic while the skeletons talk, so they never answer themselves.
+
+        The camera's audio arrives late: what comes in just after they start was said before they
+        did, so it is kept, and their last words are still coming in after they stop. Unmuting drops
+        what was waiting, as the show has answered it or it is stale; unmuting without a mute does nothing.
+        """
+        lag_min, lag = (self.s.mic_camera_lag_min_ms, self.s.mic_camera_lag_ms) if self._camera else (0, 0)
+        now = time.time()
         with self._lock:
-            self._muted = muted
-            self._mute_until = float("inf") if muted else time.time() + tail_ms / 1000.0
+            if muted:
+                if now >= self._mute_until:  # a new mute, not one already running or in its tail
+                    self.mute_from = now + min(lag_min, lag) / 1000.0
+                    self._probe_t = now if self.s.mic_debug else 0.0
+                self._mute_until = float("inf")
+            elif self._mute_until == float("inf"):
+                self._mute_until = now + (tail_ms + lag) / 1000.0
+                self.drop_pending()
 
     def is_muted(self, now: float | None = None) -> bool:
         now = time.time() if now is None else now
-        return self._muted or now < self._mute_until
+        return self.mute_from <= now < self._mute_until
 
     # ---- queries
     def speech_recent(self, within_sec: float = 1.0) -> bool:
@@ -272,6 +285,14 @@ class VoiceListener:
             return self._utts.get_nowait()
         except queue.Empty:
             return None
+
+    def take_all(self):
+        """Every waiting utterance joined into one: (int16 samples at 16 kHz, seconds of speech) or None."""
+        parts, speech_sec = [], 0.0
+        while (u := self.poll_utterance()) is not None:
+            parts.append(u[0])
+            speech_sec += u[1]
+        return (np.concatenate(parts), speech_sec) if parts else None
 
     def drop_pending(self):
         while True:
@@ -323,15 +344,17 @@ class VoiceListener:
             while buf.size >= chunk:
                 c, buf = buf[:chunk], buf[chunk:]
                 if self.is_muted():
+                    if in_speech:  # cut off by the skeletons: keep what was said so far
+                        self._finish(utt, speech_ms, silence_ms, chunk_ms)
                     if in_speech or preroll:
                         reset()
+                    if self._probe_t:
+                        self._probe(self._is_speech(c))
                     continue
-                try:
-                    speech = bool(self.vad.is_speech(c))
-                except Exception:
-                    speech = False
+                speech = self._is_speech(c)
                 if speech:
                     self.last_speech_ts = time.time()
+                    self._probe(True)
                 if not in_speech:
                     preroll.append(c)
                     if speech:
@@ -348,6 +371,21 @@ class VoiceListener:
                 if silence_ms >= self.s.mic_end_silence_ms or len(utt) * chunk_ms >= self.s.mic_max_utterance_sec * 1000:
                     self._finish(utt, speech_ms, silence_ms, chunk_ms)
                     reset()
+
+    def _is_speech(self, c) -> bool:
+        try:
+            return bool(self.vad.is_speech(c))
+        except Exception:
+            return False
+
+    def _probe(self, speech: bool):
+        """MIC_DEBUG: how long after the skeletons start the first speech comes in. Tested alone at the
+        camera that is their own voice, the camera's real lag, to set MIC_CAMERA_LAG_MIN_MS / _MS by."""
+        if speech and self._probe_t:
+            t = time.time()
+            where = "muted" if self.is_muted(t) else "NOT muted yet"
+            print(f"mic: first speech {t - self._probe_t:.2f}s after the skeletons started ({where})")
+            self._probe_t = 0.0
 
     def _finish(self, utt, speech_ms, silence_ms, chunk_ms):
         if speech_ms < self.s.mic_min_speech_ms:
